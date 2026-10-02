@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MQTT 語音控制面板</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0fdfa; /* Teal-50 */
+        }
+        
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        /* Sound Wave Animation */
+        .wave-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            height: 40px;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none; /* Prevent blocking clicks */
+        }
+
+        .wave-container.active {
+            opacity: 1;
+        }
+
+        .wave-bar {
+            width: 4px;
+            height: 10px;
+            background-color: #14b8a6; /* Teal-500 */
+            border-radius: 9999px;
+            animation: sound-wave 1s ease-in-out infinite;
+        }
+
+        .wave-bar:nth-child(1) { animation-delay: 0.0s; }
+        .wave-bar:nth-child(2) { animation-delay: 0.2s; }
+        .wave-bar:nth-child(3) { animation-delay: 0.4s; }
+        .wave-bar:nth-child(4) { animation-delay: 0.2s; }
+        .wave-bar:nth-child(5) { animation-delay: 0.0s; }
+
+        @keyframes sound-wave {
+            0%, 100% { height: 10px; }
+            50% { height: 35px; }
+        }
+
+        /* Pulsing effect for active microphone */
+        @keyframes pulse-ring {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(20, 184, 166, 0.7); }
+            70% { transform: scale(1.05); box-shadow: 0 0 0 15px rgba(20, 184, 166, 0); }
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(20, 184, 166, 0); }
+        }
+
+        .mic-active {
+            animation: pulse-ring 2s infinite;
+            background-color: #0f766e !important; /* Teal-700 */
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+
+    <div class="glass-panel w-full max-w-md rounded-3xl shadow-2xl p-8 flex flex-col items-center relative overflow-hidden">
+        
+        <!-- Background decorative elements -->
+        <div class="absolute -top-20 -left-20 w-40 h-40 bg-teal-200 rounded-full mix-blend-multiply filter blur-2xl opacity-50"></div>
+        <div class="absolute -bottom-20 -right-20 w-40 h-40 bg-cyan-200 rounded-full mix-blend-multiply filter blur-2xl opacity-50"></div>
+
+        <!-- Header & Connection Status -->
+        <div class="w-full flex justify-between items-center mb-6 relative z-10">
+            <h1 class="text-xl font-bold text-slate-800">MQTT 語音控制面板</h1>
+            <div class="flex items-center gap-2 bg-white px-3 py-1.5 rounded-full shadow-sm border border-slate-100">
+                <div id="status-dot" class="w-2.5 h-2.5 rounded-full bg-slate-400"></div>
+                <span id="status-text" class="text-xs font-semibold text-slate-600">未連線</span>
+            </div>
+        </div>
+
+        <!-- Connection Settings -->
+        <div class="w-full mb-6 relative z-10 bg-white/50 p-4 rounded-2xl border border-white/60 shadow-sm">
+            <div class="flex flex-col gap-3">
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 mb-1">MQTT 伺服器網址 (WebSockets)</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="broker-input" value="wss://broker.emqx.io:8084/mqtt" 
+                            class="flex-grow px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500">
+                        <button id="connect-btn" class="bg-slate-700 hover:bg-slate-800 text-white text-sm px-4 py-2 rounded-lg transition-colors font-medium">
+                            連線
+                        </button>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 mb-1">發布主題 (Topic)</label>
+                    <input type="text" id="topic-input" value="jjlab/a" 
+                        class="w-full px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 mb-1">語音辨識語言</label>
+                    <div class="relative">
+                        <select id="lang-select" class="w-full px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none pr-8">
+                            <option value="zh-TW" selected>繁體中文 (台灣)</option>
+                            <option value="en-US">英文 (English - US)</option>
+                            <option value="ja-JP">日文 (日本語)</option>
+                            <option value="ko-KR">韓文 (한국어)</option>
+                        </select>
+                        <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500">
+                            <i class="fa-solid fa-chevron-down text-xs"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sandbox Notice Banner -->
+        <div id="sandbox-notice" class="hidden w-full mb-6 p-3 bg-purple-50 border border-purple-200 text-purple-800 text-xs rounded-xl flex items-center gap-2.5 relative z-10">
+            <i class="fa-solid fa-circle-info text-purple-500 text-base flex-shrink-0"></i>
+            <span>環境限制：目前正以<b>模擬模式</b>運作。將此 HTML 檔案下載後於瀏覽器直接開啟即可進行真實 MQTT 發送。</span>
+        </div>
+
+        <!-- Microphone Button Area -->
+        <div class="relative flex flex-col items-center justify-center py-6 z-10">
+            <button id="mic-btn" class="w-24 h-24 bg-teal-500 hover:bg-teal-600 text-white rounded-full shadow-lg transition-all duration-300 flex items-center justify-center text-4xl focus:outline-none focus:ring-4 focus:ring-teal-200">
+                <i id="mic-icon" class="fa-solid fa-microphone"></i>
+            </button>
+            
+            <!-- Sound Wave Animation -->
+            <div id="wave-container" class="wave-container mt-6">
+                <div class="wave-bar"></div>
+                <div class="wave-bar"></div>
+                <div class="wave-bar"></div>
+                <div class="wave-bar"></div>
+                <div class="wave-bar"></div>
+            </div>
+            
+            <p id="instruction-text" class="text-sm text-slate-500 mt-2 font-medium text-center h-5">
+                點擊麥克風開始說話
+            </p>
+        </div>
+
+        <!-- Message Input & Send Button -->
+        <div class="w-full mt-6 flex gap-2 relative z-10">
+            <div class="relative flex-grow">
+                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <i class="fa-regular fa-comment-dots text-slate-400"></i>
+                </div>
+                <input type="text" id="message-input" value="b1_on" 
+                    class="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all"
+                    placeholder="請輸入或語音輸入訊息...">
+            </div>
+            <button id="send-btn" class="bg-teal-500 hover:bg-teal-600 text-white px-5 py-3 rounded-xl shadow-md transition-all duration-200 flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2">
+                <i class="fa-regular fa-paper-plane mr-2"></i> 傳送
+            </button>
+        </div>
+        
+        <!-- Toast Notification Area -->
+        <div id="toast" class="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-slate-800 text-white text-xs font-semibold px-4 py-2 rounded-full opacity-0 transition-opacity duration-300 pointer-events-none z-20">
+            訊息已發送！
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            
+            // --- DOM Elements ---
+            const statusDot = document.getElementById('status-dot');
+            const statusText = document.getElementById('status-text');
+            const brokerInput = document.getElementById('broker-input');
+            const topicInput = document.getElementById('topic-input');
+            const langSelect = document.getElementById('lang-select');
+            const connectBtn = document.getElementById('connect-btn');
+            const micBtn = document.getElementById('mic-btn');
+            const micIcon = document.getElementById('mic-icon');
+            const waveContainer = document.getElementById('wave-container');
+            const instructionText = document.getElementById('instruction-text');
+            const messageInput = document.getElementById('message-input');
+            const sendBtn = document.getElementById('send-btn');
+            const toast = document.getElementById('toast');
+
+            // --- State Variables ---
+            let mqttTopic = 'jjlab/a';
+            let isRecording = false;
+            let silenceTimer = null;
+            let client = null;
+            const SILENCE_TIMEOUT_MS = 3000; // 3 seconds timeout
+
+            // --- MQTT Setup ---
+            function activateMockMode(message) {
+                if (client && typeof client.end === 'function') {
+                    client.end(true); // Force close to stop reconnecting
+                }
+                
+                statusDot.className = 'w-2.5 h-2.5 rounded-full bg-purple-500';
+                statusText.textContent = message || '模擬模式 (本地)';
+                statusText.className = 'text-xs font-semibold text-purple-700';
+                
+                const noticeEl = document.getElementById('sandbox-notice');
+                if (noticeEl) {
+                    noticeEl.classList.remove('hidden');
+                }
+
+                // Create a fake client for UI testing
+                client = {
+                    connected: true,
+                    publish: (topic, msg, opts, cb) => {
+                        console.log(`[MOCK MQTT] Published to '${topic}': ${msg}`);
+                        if (cb) setTimeout(() => cb(null), 100);
+                    }
+                };
+            }
+
+            function connectMQTT() {
+                const brokerUrl = brokerInput.value.trim();
+                mqttTopic = topicInput.value.trim();
+
+                if (client && typeof client.end === 'function') {
+                    client.end(true);
+                }
+
+                statusDot.className = 'w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse';
+                statusText.textContent = '連線中...';
+                statusText.className = 'text-xs font-semibold text-amber-600';
+
+                try {
+                    client = mqtt.connect(brokerUrl, {
+                        reconnectPeriod: 3000,
+                        connectTimeout: 5000
+                    });
+
+                    client.on('connect', () => {
+                        statusDot.className = 'w-2.5 h-2.5 rounded-full bg-teal-500';
+                        statusText.textContent = '已連線';
+                        statusText.className = 'text-xs font-semibold text-teal-700';
+                        connectBtn.textContent = '重新連線';
+                        const noticeEl = document.getElementById('sandbox-notice');
+                        if (noticeEl) noticeEl.classList.add('hidden');
+                    });
+
+                    client.on('reconnect', () => {
+                        statusDot.className = 'w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse';
+                        statusText.textContent = '重新連線中...';
+                        statusText.className = 'text-xs font-semibold text-amber-600';
+                    });
+
+                    client.on('error', (err) => {
+                        if (err.message && (err.message.includes('Canvas') || err.message.includes('Security') || err.message.includes('not allowed'))) {
+                            activateMockMode('模擬模式 (預覽環境)');
+                        } else {
+                            console.warn('MQTT connection warning:', err);
+                            activateMockMode('模擬模式 (連線回退)');
+                        }
+                    });
+
+                    client.on('offline', () => {
+                        if (!statusText.textContent.includes('模擬')) {
+                            statusDot.className = 'w-2.5 h-2.5 rounded-full bg-slate-400';
+                            statusText.textContent = '未連線';
+                            statusText.className = 'text-xs font-semibold text-slate-600';
+                        }
+                    });
+                } catch (error) {
+                    activateMockMode('模擬模式 (預覽環境)');
+                }
+            }
+
+            connectBtn.addEventListener('click', connectMQTT);
+
+            // Connect initially on load
+            connectMQTT();
+
+            // --- Speech Recognition Setup ---
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            let recognition;
+
+            if (SpeechRecognition) {
+                recognition = new SpeechRecognition();
+                recognition.continuous = true;     // Keep recording until manual stop or timeout
+                recognition.interimResults = true; // Give results as we speak for responsiveness
+
+                recognition.onstart = () => {
+                    isRecording = true;
+                    micBtn.classList.add('mic-active');
+                    micIcon.classList.replace('fa-microphone', 'fa-stop');
+                    waveContainer.classList.add('active');
+                    instructionText.textContent = '正在聆聽中...';
+                    instructionText.classList.add('text-teal-600', 'animate-pulse');
+                    resetSilenceTimer();
+                };
+
+                recognition.onresult = (event) => {
+                    resetSilenceTimer();
+                    
+                    let interimTranscript = '';
+                    let finalTranscript = '';
+
+                    for (let i = event.resultIndex; i < event.results.length; ++i) {
+                        if (event.results[i].isFinal) {
+                            finalTranscript += event.results[i][0].transcript;
+                        } else {
+                            interimTranscript += event.results[i][0].transcript;
+                        }
+                    }
+                    
+                    if (finalTranscript !== '') {
+                        messageInput.value = finalTranscript.trim();
+                    } else if (interimTranscript !== '') {
+                        messageInput.value = interimTranscript.trim();
+                    }
+                };
+
+                recognition.onerror = (event) => {
+                    if (event.error === 'aborted') {
+                        stopRecording();
+                        return;
+                    }
+                    
+                    if (event.error === 'no-speech') {
+                        stopRecording();
+                        instructionText.textContent = '未偵測到聲音';
+                        setTimeout(() => {
+                            if(!isRecording) instructionText.textContent = '點擊麥克風開始說話';
+                        }, 3000);
+                        return;
+                    }
+
+                    console.error('Speech recognition error', event.error);
+                    stopRecording();
+                    instructionText.textContent = '語音辨識錯誤：' + event.error;
+                    setTimeout(() => {
+                        if(!isRecording) instructionText.textContent = '點擊麥克風開始說話';
+                    }, 3000);
+                };
+
+                recognition.onend = () => {
+                    stopRecording();
+                };
+            } else {
+                instructionText.textContent = '您的瀏覽器不支援語音辨識功能。';
+                instructionText.classList.add('text-red-500');
+                micBtn.disabled = true;
+                micBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            }
+
+            // --- Logic Functions ---
+            function toggleRecording() {
+                if (!SpeechRecognition) return;
+
+                if (isRecording) {
+                    stopRecording();
+                } else {
+                    try {
+                        messageInput.value = ''; // Clear input on new recording
+                        // 動態設定選取的語言
+                        recognition.lang = langSelect.value;
+                        recognition.start();
+                    } catch (e) {
+                        console.error('Recognition already started or error: ', e);
+                    }
+                }
+            }
+
+            function stopRecording() {
+                if (!isRecording) return;
+                
+                isRecording = false;
+                clearTimeout(silenceTimer);
+                
+                try {
+                    recognition.stop();
+                } catch(e) {}
+
+                // Reset UI
+                micBtn.classList.remove('mic-active');
+                micIcon.classList.replace('fa-stop', 'fa-microphone');
+                waveContainer.classList.remove('active');
+                instructionText.textContent = '準備就緒，可編輯或傳送';
+                instructionText.classList.remove('text-teal-600', 'animate-pulse');
+            }
+
+            function resetSilenceTimer() {
+                clearTimeout(silenceTimer);
+                silenceTimer = setTimeout(() => {
+                    stopRecording();
+                }, SILENCE_TIMEOUT_MS);
+            }
+
+            function showToast() {
+                toast.classList.remove('opacity-0');
+                setTimeout(() => {
+                    toast.classList.add('opacity-0');
+                }, 2000);
+            }
+
+            // --- Event Listeners ---
+            micBtn.addEventListener('click', toggleRecording);
+
+            sendBtn.addEventListener('click', () => {
+                const message = messageInput.value;
+                mqttTopic = topicInput.value.trim();
+                
+                if (!message) return;
+
+                if (client && client.connected) {
+                    client.publish(mqttTopic, message, { qos: 0 }, (err) => {
+                        if (!err) {
+                            showToast();
+                            instructionText.textContent = '訊息已發送至 ' + mqttTopic;
+                            setTimeout(() => {
+                                if(!isRecording) instructionText.textContent = '點擊麥克風開始說話';
+                            }, 3000);
+                        } else {
+                            console.error('Publish error:', err);
+                            alert('發送訊息失敗。');
+                        }
+                    });
+                } else {
+                    alert('未連線至 MQTT 伺服器，請稍後再試。');
+                }
+            });
+            
+            messageInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    sendBtn.click();
+                }
+            });
+        });
+    </script>
+</body>
+</html>
